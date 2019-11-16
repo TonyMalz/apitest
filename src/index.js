@@ -10,50 +10,58 @@ const mongoose = require('mongoose');
 const uuid = require('uuid/v4');
 const passport = require('passport');
 const LocalStrategy = require('passport-local').Strategy;
+const MongoSessionStore = require('connect-mongodb-session')(session);
 
-
-const app = express();
-app.use(session({
-    secret: 'rZljfHWcmb3palot7kdQJs7nmjqPM8P0',
-    // force save session to store, even if session was never modified
-    // set to true only if store does not implement touch method and sets expiration date on stored sessions
-    resave: false,
-    // do not force new (first time) sessions to be saved to store 
-    // and stay compliant with laws that require user permission before setting cookies
-    saveUninitialized: false,
-    genid: (req) => {
-        console.log('---- Inside the session middleware')
-        console.log(req.sessionID)
-        return uuid() // use UUIDs for session IDs
-    },
-    cookie: {
-        maxAge: 10000 // 10 seconds
-    },
-}))
-
-// adding Helmet to enhance your API's security
-app.use(helmet());
-
-// using bodyParser to parse JSON bodies into JS objects
-app.use(bodyParser.json());
-
-// enabling CORS for all requests
-const cOptions = { origin: true, credentials: true };
-app.use(cors(cOptions));
-
-// adding morgan to log HTTP requests
-app.use(morgan('combined'));
-
-// add session authentication with passport
-app.use(passport.initialize());
-app.use(passport.session());
-
-// DB
+// DB stuff for in-memory MongoDB
 const { connectDB, getMongoUrl } = require("./db/mongo")
 const { getUsers, insertUser, updateUser, deleteUser } = require("./db/users")
 const User = require('./models/user');
 
 connectDB().then(async () => {
+    const app = express();
+
+    // save express sessions in MongoDB, since default in-memory session storage is not recommended
+    // for other than development purposes, as it can lead to high memory consumption and leaks
+    const sessionStore = new MongoSessionStore({ uri: getMongoUrl(), collection: 'userSessions' })
+    sessionStore.on('error', function (error) {
+        console.error('---- MongoSessionStorage error ', error);
+    });
+
+    app.use(session({
+        secret: 'rZljfHWcmb3palot7kdQJs7nmjqPM8P0',
+        // force save session to store, even if session was never modified
+        // set to true only if store does not implement touch method and sets expiration date on stored sessions
+        resave: false,
+        // do not force new (first time) sessions to be saved to store 
+        // and stay compliant with laws that require user permission before setting cookies
+        saveUninitialized: false,
+        genid: (req) => {
+            console.log('---- Inside the session middleware')
+            console.log(req.sessionID)
+            return uuid() // use UUIDs for session IDs
+        },
+        cookie: {
+            maxAge: 10000 // 10 seconds
+        },
+        store: sessionStore
+    }))
+
+    // adding Helmet to enhance your API's security
+    app.use(helmet());
+
+    // using bodyParser to parse JSON bodies into JS objects
+    app.use(bodyParser.json());
+
+    // enabling CORS for all requests
+    const cOptions = { origin: true, credentials: true };
+    app.use(cors(cOptions));
+
+    // adding morgan to log HTTP requests
+    app.use(morgan('combined'));
+
+    // add session authentication with passport
+    app.use(passport.initialize());
+    app.use(passport.session());
 
     // add some sample data to user collection
     await insertUser({ username: 'Peter Pan 1', email: 'p1.pan@mail.de', timeStored: new Date() });
@@ -204,6 +212,9 @@ connectDB().then(async () => {
         if (!req.isAuthenticated()) {
             return res.status(401).send({ message: "authentication needed for this endpoint" });
         }
+        console.log("---- called authenticated endpoint [/registered]");
+        console.log(`req.sessionID: ${JSON.stringify(req.sessionID)}`)
+        console.log(`req.user: ${JSON.stringify(req.user)}`)
         User.find((err, users) => {
             if (err) {
                 return next(err);
